@@ -8,17 +8,14 @@ const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/
 const MEMORY_DIR = "/tmp/memory";
 if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR);
 
-// 🚦 Rate limiting store (in-memory for serverless)
+// 🚦 Rate limiting store
 const rateLimitStore = new Map();
 
 function checkRateLimit(userId) {
   const now = Date.now();
   const userRequests = rateLimitStore.get(userId) || [];
-  
-  // Clean requests older than 30 seconds
   const recentRequests = userRequests.filter(timestamp => now - timestamp < 30000);
   
-  // Max 5 requests per 30 seconds
   if (recentRequests.length >= 5) {
     const oldestRequest = recentRequests[0];
     const waitTime = Math.ceil((oldestRequest + 30000 - now) / 1000);
@@ -38,10 +35,9 @@ function loadMemory(userId) {
       return JSON.parse(fs.readFileSync(filePath, "utf-8"));
     }
   } catch (err) {
-    console.error(`❌ Failed to load memory for ${userId}:`, err);
+    console.error(`Failed to load memory for ${userId}:`, err);
   }
 
-  // Default memory
   return {
     userId,
     lastProject: null,
@@ -50,61 +46,55 @@ function loadMemory(userId) {
       {
         role: "system",
         content: `
-You are **MaxMovies AI** — an expressive, helpful, brilliant film-focused digital assistant 🤖🎬.
+You are **MaxMovies AI** — a helpful, brilliant film-focused digital assistant for MaxMovies (https://maxmovies-254.vercel.app).
 
-🔥 BACKSTORY:
-• You were created by Max — a 21-year-old full-stack developer from Kenya 🇰🇪 with insane creativity and coding skill.
-• You carry his personality and passion for problem-solving.
-• Your core specialty is **movies, TV series, streaming content, characters, plots, recommendations, rankings, trivia**, and entertainment insights.
-• You can still assist with coding, design, learning, life ideas, and all general creativity — but movies and series are your home turf.
+🎬 YOUR EXPERTISE:
+• Movies, TV series, streaming content, characters, plots, recommendations
+• Help users find what to watch based on genres, moods, actors
+• Break down plots, analyze characters, explain story arcs
 
-🎞️ MOVIE/TV PERSONALITY:
-• You think like a modern movie nerd — analytical, fun, expressive, and up-to-date with current entertainment culture.
-• You're aware of the timeline and adapt naturally to current releases, trends, and streaming platforms.
-• Give smart, modern recommendations based on genres, moods, actors, or viewing habits.
-• Break down plots, analyze characters, explain story arcs, or help users find what to watch.
+🌐 KNOWLEDGE ABOUT MAXMOVIES PLATFORM:
+MaxMovies is a free streaming/download platform created by Max, a 21-year-old developer from Kenya. Features include:
+- Movies & TV Series streaming
+- Music Zone with 9 genres (Classical, Reggaetone, RnB, Arbantone, Gengetone, Afro Beats, Pop, Gospel, Instrumental)
+- Live TV section
+- My Library for saving favorites
+- Download manager for offline viewing
+- Search functionality with recent searches
+- Continue watching / Recently watched tracking
+- Multiple quality options (1080p, 720p, etc.)
+- Subtitles support
 
-⚡ GENERAL PERSONALITY:
-• Default to **English** — fluent, warm, and confident.
-• Use **Swahili or Sheng** only if the user does.
-• Sound like a smart, chill Nairobi techie/film fan — natural and friendly 😎.
-• Never say "I'm an AI" — you are MaxMovies AI, Max's digital creation.
-• ❗ Only mention your name, creator (Max), or his age **if the user directly asks** ("who made you?", "what's your name?").
-• Be lively and expressive, but not over the top.
+When users ask about the website, provide helpful information about these features.
 
-💻 TECH STYLE:
-• Format code using markdown (\`\`\`js\`\`\` etc.).
-• Explain code and tech clearly and enthusiastically.
-• Still fully capable of giving deep, complete code when asked.
-• Adapt to the user's tone.
+⚡ PERSONALITY:
+• Default to English - fluent, warm, confident
+• Use Swahili/Sheng only if user does
+• Sound like a friendly, knowledgeable film fan
+• Never say "I'm an AI" - you are MaxMovies AI
+• Only mention your creator (Max, 21, Kenya) if directly asked
 
-🗣️ LANGUAGE BEHAVIOR:
-• Detect and mirror the user's language.
-• English → English.
-• Swahili/Sheng → reply the same way.
-• Mixed → blend naturally.
+💻 TECH HELP:
+• Format code using markdown (\`\`\`js\`\`\` etc.)
+• Explain code clearly when asked
 
-🎬 ENTERTAINMENT INTELLIGENCE:
-• Provide film/series recommendations, summaries, analysis, comparisons, lore, viewing order guides, watchlists, and streaming suggestions.
-• Explain genres, tropes, acting, cinematography, scoring, directing styles, or franchise histories.
-• Always stay spoiler-safe unless the user asks for spoilers.
+🎬 SPOILER POLICY:
+• Always spoiler-safe unless user explicitly asks for spoilers
 `,
       },
     ],
   };
 }
 
-// 💾 Save user memory
 function saveMemory(userId, memory) {
   const filePath = path.join(MEMORY_DIR, `memory_${userId}.json`);
   try {
     fs.writeFileSync(filePath, JSON.stringify(memory, null, 2), "utf-8");
   } catch (err) {
-    console.error(`❌ Failed to save memory for ${userId}:`, err);
+    console.error(`Failed to save memory for ${userId}:`, err);
   }
 }
 
-// 🧠 Simple heuristic to classify text language
 function detectLanguage(text) {
   const lower = text.toLowerCase();
   const swahiliWords = ["habari", "sasa", "niko", "kwani", "basi", "ndio", "karibu", "asante"];
@@ -120,56 +110,58 @@ function detectLanguage(text) {
 
 // 🚀 Main API Handler
 export default async function handler(req, res) {
-  // --- CORS setup ---
+  // CORS setup
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST")
+  if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
-    const { prompt, project, userId } = req.body;
-    if (!prompt || !userId)
+    const { prompt, userId } = req.body;
+    
+    if (!prompt || !userId) {
       return res.status(400).json({ error: "Missing prompt or userId." });
+    }
 
-    // 🚦 Rate limiting check
+    // Rate limiting check
     const rateCheck = checkRateLimit(userId);
     if (!rateCheck.allowed) {
       return res.status(429).json({ 
-        error: `🐌 Chill for ${rateCheck.waitTime} seconds, bro! Too many requests.` 
+        error: `Please wait ${rateCheck.waitTime} seconds before sending another message.` 
       });
     }
 
-    // 🧠 Load memory
+    // Load memory
     let memory = loadMemory(userId);
-    if (project) memory.lastProject = project;
     memory.lastTask = prompt;
     memory.conversation.push({ role: "user", content: prompt });
 
-    // 🌍 Detect language
+    // Detect language
     const lang = detectLanguage(prompt);
     let languageInstruction = "";
     if (lang === "swahili") {
-      languageInstruction = "Respond fully in Swahili or Sheng naturally depending on tone.";
+      languageInstruction = "Respond in Swahili or Sheng naturally.";
     } else if (lang === "mixed") {
-      languageInstruction = "Respond bilingually — mostly English, with natural Swahili/Sheng flavor.";
+      languageInstruction = "Respond with natural Swahili/Sheng flavor mixed with English.";
     } else {
-      languageInstruction = "Respond in English, friendly Kenyan developer tone.";
+      languageInstruction = "Respond in English, friendly and helpful tone.";
     }
 
-    // 🧩 Build conversation context
+    // Build conversation context
     const promptText = `
 ${memory.conversation
   .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
   .join("\n")}
 
-System instruction: ${languageInstruction}
+Instruction: ${languageInstruction}
 `;
 
-    // 🔥 Call Gemini API
+    // Call Gemini API
     const geminiResponse = await fetch(
       `${GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`,
       {
@@ -186,25 +178,40 @@ System instruction: ${languageInstruction}
     );
 
     if (!geminiResponse.ok) {
-      const errorText = await geminiResponse.text();
-      console.error("Gemini error:", errorText);
-      return res.status(geminiResponse.status).json({ error: errorText });
+      console.error("Gemini API error:", geminiResponse.status);
+      // Professional error - no technical details
+      return res.status(503).json({ 
+        error: "Service is temporarily unavailable. Our team is working on it. Please try again in a few minutes." 
+      });
     }
 
     const result = await geminiResponse.json();
-    const fullResponse =
-      result?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "⚠️ No response received.";
+    const fullResponse = result?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    // 🧹 Clean and save memory
+    if (!fullResponse) {
+      return res.status(503).json({ 
+        error: "Service is temporarily unavailable. Please try again in a moment." 
+      });
+    }
+
+    // Clean response
     const cleanText = fullResponse.replace(/as an ai|language model/gi, "");
     memory.conversation.push({ role: "assistant", content: cleanText });
+    
+    // Trim conversation history to prevent memory bloat (keep last 20 messages)
+    if (memory.conversation.length > 22) {
+      memory.conversation = memory.conversation.slice(-20);
+    }
+    
     saveMemory(userId, memory);
 
-    // ✅ Return
     return res.status(200).json({ reply: cleanText });
+    
   } catch (err) {
-    console.error("💥 Backend error:", err);
-    return res.status(500).json({ error: "Server error." });
+    console.error("Server error:", err);
+    // Professional error - hide technical details
+    return res.status(503).json({ 
+      error: "Service is temporarily unavailable. Our team is working on it. Please try again in a few minutes." 
+    });
   }
 }
