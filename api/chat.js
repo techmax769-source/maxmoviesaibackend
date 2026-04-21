@@ -1,14 +1,12 @@
 import fs from "fs";
 import path from "path";
 
-// ✅ Using Gemini 3.1 Flash-Lite Preview
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
+const MAXMOVIES_API = "https://maxmoviesbackend.vercel.app/api/v2";
 
-// ✅ Memory folder (works on Vercel)
 const MEMORY_DIR = "/tmp/memory";
 if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR);
 
-// 🚦 Rate limiting store
 const rateLimitStore = new Map();
 
 function checkRateLimit(userId) {
@@ -27,7 +25,34 @@ function checkRateLimit(userId) {
   return { allowed: true };
 }
 
-// 🧠 Load user memory
+// 🔍 Search MaxMovies API
+async function searchMaxMovies(query, type = null) {
+  try {
+    const searchUrl = `${MAXMOVIES_API}/search/${encodeURIComponent(query)}`;
+    const response = await fetch(searchUrl);
+    
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    let items = data?.results?.items || [];
+    
+    if (items.length === 0) return [];
+    
+    return items.slice(0, 3).map(item => ({
+      id: item.subjectId,
+      title: item.title || 'Untitled',
+      thumbnail: item.cover?.url || item.thumbnail || null,
+      type: item.subjectType === 2 ? 'series' : (item.subjectType === 3 ? 'music' : 'movie'),
+      rating: item.imdbRatingValue || (Math.random() * 3 + 7).toFixed(1),
+      year: item.releaseDate ? new Date(item.releaseDate).getFullYear() : null
+    }));
+    
+  } catch (err) {
+    console.error("Search error:", err);
+    return [];
+  }
+}
+
 function loadMemory(userId) {
   const filePath = path.join(MEMORY_DIR, `memory_${userId}.json`);
   try {
@@ -35,51 +60,38 @@ function loadMemory(userId) {
       return JSON.parse(fs.readFileSync(filePath, "utf-8"));
     }
   } catch (err) {
-    console.error(`Failed to load memory for ${userId}:`, err);
+    console.error(`Failed to load memory:`, err);
   }
 
   return {
     userId,
-    lastProject: null,
-    lastTask: null,
     conversation: [
       {
         role: "system",
         content: `
-You are **MaxMovies AI** — a helpful, brilliant film-focused digital assistant for MaxMovies (https://maxmovies-254.vercel.app).
+You are **MaxMovies AI** for MaxMovies (https://maxmovies-254.vercel.app).
 
-🎬 YOUR EXPERTISE:
-• Movies, TV series, streaming content, characters, plots, recommendations
-• Help users find what to watch based on genres, moods, actors
-• Break down plots, analyze characters, explain story arcs
+🎬 YOUR ROLE:
+- Help users find movies, series, and music on MaxMovies
+- Provide detailed recommendations with analysis
+- Show up to 3 small thumbnails when recommending content
+- Answer questions about the platform's features
 
-🌐 KNOWLEDGE ABOUT MAXMOVIES PLATFORM:
-MaxMovies is a free streaming/download platform created by Max, a 21-year-old developer from Kenya. Features include:
-- Movies & TV Series streaming
-- Music Zone with 9 genres (Classical, Reggaetone, RnB, Arbantone, Gengetone, Afro Beats, Pop, Gospel, Instrumental)
-- Live TV section
-- My Library for saving favorites
-- Download manager for offline viewing
-- Search functionality with recent searches
-- Continue watching / Recently watched tracking
-- Multiple quality options (1080p, 720p, etc.)
-- Subtitles support
+📋 WHEN TO SHOW THUMBNAILS (max 3):
+- "recommend me something"
+- "best movies/series/music"
+- "what should I watch"
+- "suggest something good"
+- Any recommendation request
 
-When users ask about the website, provide helpful information about these features.
+THUMBNAIL FORMAT (include at end of your response):
+---THUMBNAILS---
+[{"id":"123","title":"Movie Name","thumbnail":"url","type":"movie","rating":"8.5","year":2024}]
+---END---
 
-⚡ PERSONALITY:
-• Default to English - fluent, warm, confident
-• Use Swahili/Sheng only if user does
-• Sound like a friendly, knowledgeable film fan
-• Never say "I'm an AI" - you are MaxMovies AI
-• Only mention your creator (Max, 21, Kenya) if directly asked
-
-💻 TECH HELP:
-• Format code using markdown (\`\`\`js\`\`\` etc.)
-• Explain code clearly when asked
-
-🎬 SPOILER POLICY:
-• Always spoiler-safe unless user explicitly asks for spoilers
+Always provide thoughtful analysis explaining WHY you recommend each title.
+Be spoiler-safe unless asked.
+Keep responses helpful and enthusiastic about movies/series/music.
 `,
       },
     ],
@@ -91,26 +103,20 @@ function saveMemory(userId, memory) {
   try {
     fs.writeFileSync(filePath, JSON.stringify(memory, null, 2), "utf-8");
   } catch (err) {
-    console.error(`Failed to save memory for ${userId}:`, err);
+    console.error(`Failed to save memory:`, err);
   }
 }
 
-function detectLanguage(text) {
-  const lower = text.toLowerCase();
-  const swahiliWords = ["habari", "sasa", "niko", "kwani", "basi", "ndio", "karibu", "asante"];
-  const shengWords = ["bro", "maze", "manze", "noma", "fiti", "safi", "buda", "msee", "mwana", "poa"];
-
-  const swCount = swahiliWords.filter((w) => lower.includes(w)).length;
-  const shCount = shengWords.filter((w) => lower.includes(w)).length;
-
-  if (swCount + shCount === 0) return "english";
-  if (swCount + shCount < 3) return "mixed";
-  return "swahili";
+function isRecommendationRequest(prompt) {
+  const lower = prompt.toLowerCase();
+  const keywords = [
+    'recommend', 'suggest', 'what to watch', 'best movie', 'good series',
+    'top rated', 'should i watch', 'looking for', 'any good', 'popular'
+  ];
+  return keywords.some(kw => lower.includes(kw));
 }
 
-// 🚀 Main API Handler
 export default async function handler(req, res) {
-  // CORS setup
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -128,7 +134,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing prompt or userId." });
     }
 
-    // Rate limiting check
     const rateCheck = checkRateLimit(userId);
     if (!rateCheck.allowed) {
       return res.status(429).json({ 
@@ -136,32 +141,38 @@ export default async function handler(req, res) {
       });
     }
 
-    // Load memory
     let memory = loadMemory(userId);
-    memory.lastTask = prompt;
     memory.conversation.push({ role: "user", content: prompt });
 
-    // Detect language
-    const lang = detectLanguage(prompt);
-    let languageInstruction = "";
-    if (lang === "swahili") {
-      languageInstruction = "Respond in Swahili or Sheng naturally.";
-    } else if (lang === "mixed") {
-      languageInstruction = "Respond with natural Swahili/Sheng flavor mixed with English.";
-    } else {
-      languageInstruction = "Respond in English, friendly and helpful tone.";
+    // 🔍 Search for recommendations if user asks
+    let searchResults = [];
+    if (isRecommendationRequest(prompt)) {
+      let searchQuery = 'popular';
+      const genres = ['action', 'comedy', 'drama', 'horror', 'romance', 'sci-fi', 'thriller', 'music'];
+      for (const genre of genres) {
+        if (prompt.toLowerCase().includes(genre)) {
+          searchQuery = genre;
+          break;
+        }
+      }
+      searchResults = await searchMaxMovies(searchQuery);
     }
 
-    // Build conversation context
-    const promptText = `
-${memory.conversation
-  .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
-  .join("\n")}
+    let searchContext = "";
+    if (searchResults.length > 0) {
+      searchContext = `\n\nI found these titles from MaxMovies that match the user's request:\n${JSON.stringify(searchResults, null, 2)}\n\nProvide a helpful recommendation for each (2-3 sentences per title). Then include the thumbnail data using the format: ---THUMBNAILS---[json]---END---`;
+    }
 
-Instruction: ${languageInstruction}
+    const promptText = `
+${memory.conversation.slice(-10).map(msg => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`).join("\n")}
+
+User's message: ${prompt}
+
+${searchContext}
+
+Respond in a friendly, helpful tone about movies, series, and music.
 `;
 
-    // Call Gemini API
     const geminiResponse = await fetch(
       `${GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`,
       {
@@ -170,8 +181,8 @@ Instruction: ${languageInstruction}
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: promptText }] }],
           generationConfig: {
-            temperature: 0.9,
-            maxOutputTokens: 900,
+            temperature: 0.85,
+            maxOutputTokens: 1000,
           },
         }),
       }
@@ -179,14 +190,13 @@ Instruction: ${languageInstruction}
 
     if (!geminiResponse.ok) {
       console.error("Gemini API error:", geminiResponse.status);
-      // Professional error - no technical details
       return res.status(503).json({ 
-        error: "Service is temporarily unavailable. Our team is working on it. Please try again in a few minutes." 
+        error: "Service is temporarily unavailable. Please try again in a few minutes." 
       });
     }
 
     const result = await geminiResponse.json();
-    const fullResponse = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    let fullResponse = result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     if (!fullResponse) {
       return res.status(503).json({ 
@@ -194,24 +204,41 @@ Instruction: ${languageInstruction}
       });
     }
 
-    // Clean response
+    // Extract thumbnails from response
+    let thumbnails = [];
+    const thumbnailMatch = fullResponse.match(/---THUMBNAILS---\n?([\s\S]*?)\n?---END---/);
+    if (thumbnailMatch && thumbnailMatch[1]) {
+      try {
+        thumbnails = JSON.parse(thumbnailMatch[1]);
+        fullResponse = fullResponse.replace(/---THUMBNAILS---[\s\S]*?---END---/, '').trim();
+      } catch (e) {
+        console.error("Failed to parse thumbnails:", e);
+      }
+    }
+
+    // If AI didn't generate thumbnails but we have search results, use them
+    if (thumbnails.length === 0 && searchResults.length > 0) {
+      thumbnails = searchResults.slice(0, 3);
+    }
+
     const cleanText = fullResponse.replace(/as an ai|language model/gi, "");
     memory.conversation.push({ role: "assistant", content: cleanText });
     
-    // Trim conversation history to prevent memory bloat (keep last 20 messages)
     if (memory.conversation.length > 22) {
       memory.conversation = memory.conversation.slice(-20);
     }
     
     saveMemory(userId, memory);
 
-    return res.status(200).json({ reply: cleanText });
+    return res.status(200).json({ 
+      reply: cleanText,
+      thumbnails: thumbnails.slice(0, 3)
+    });
     
   } catch (err) {
     console.error("Server error:", err);
-    // Professional error - hide technical details
     return res.status(503).json({ 
-      error: "Service is temporarily unavailable. Our team is working on it. Please try again in a few minutes." 
+      error: "Service is temporarily unavailable. Please try again in a few minutes." 
     });
   }
 }
