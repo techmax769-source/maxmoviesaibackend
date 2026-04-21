@@ -25,7 +25,7 @@ function checkRateLimit(userId) {
   return { allowed: true };
 }
 
-// 🔍 Search MaxMovies API
+// 🔍 Search MaxMovies API using your actual endpoint
 async function searchMaxMovies(query, type = null) {
   try {
     const searchUrl = `${MAXMOVIES_API}/search/${encodeURIComponent(query)}`;
@@ -38,18 +38,44 @@ async function searchMaxMovies(query, type = null) {
     
     if (items.length === 0) return [];
     
+    // Return items exactly as your website expects them
     return items.slice(0, 3).map(item => ({
-      id: item.subjectId,
+      subjectId: item.subjectId,
       title: item.title || 'Untitled',
-      thumbnail: item.cover?.url || item.thumbnail || null,
+      cover: item.cover?.url || item.thumbnail || null,
+      thumbnail: item.thumbnail || item.cover?.url,
       type: item.subjectType === 2 ? 'series' : (item.subjectType === 3 ? 'music' : 'movie'),
       rating: item.imdbRatingValue || (Math.random() * 3 + 7).toFixed(1),
-      year: item.releaseDate ? new Date(item.releaseDate).getFullYear() : null
+      year: item.releaseDate ? new Date(item.releaseDate).getFullYear() : null,
+      subjectType: item.subjectType
     }));
     
   } catch (err) {
     console.error("Search error:", err);
     return [];
+  }
+}
+
+// 🎬 Get trending content
+async function getTrending() {
+  try {
+    const response = await fetch(`${MAXMOVIES_API}/trending`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data?.results?.subjectList || [];
+  } catch (err) {
+    return [];
+  }
+}
+
+// 🎬 Get homepage data
+async function getHomepage() {
+  try {
+    const response = await fetch(`${MAXMOVIES_API}/homepage`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (err) {
+    return null;
   }
 }
 
@@ -75,23 +101,24 @@ You are **MaxMovies AI** for MaxMovies (https://maxmovies-254.vercel.app).
 - Help users find movies, series, and music on MaxMovies
 - Provide detailed recommendations with analysis
 - Show up to 3 small thumbnails when recommending content
-- Answer questions about the platform's features
 
-📋 WHEN TO SHOW THUMBNAILS (max 3):
-- "recommend me something"
-- "best movies/series/music"
-- "what should I watch"
-- "suggest something good"
-- Any recommendation request
+📋 HOW THUMBNAILS WORK:
+When you recommend content, the system will automatically fetch REAL thumbnails from the MaxMovies database. You don't need to provide image URLs or fake IDs.
 
-THUMBNAIL FORMAT (include at end of your response):
----THUMBNAILS---
-[{"id":"123","title":"Movie Name","thumbnail":"url","type":"movie","rating":"8.5","year":2024}]
----END---
+Just write your recommendations naturally, and the system will attach the thumbnails.
 
-Always provide thoughtful analysis explaining WHY you recommend each title.
-Be spoiler-safe unless asked.
-Keep responses helpful and enthusiastic about movies/series/music.
+EXAMPLE RESPONSE FORMAT:
+Just write your text recommendations like this:
+"I recommend these 3 action movies: [explain each one]"
+
+The system will automatically find and attach matching thumbnails from the MaxMovies library.
+
+RULES:
+- Always explain WHY you recommend each title
+- Consider the user's stated preferences (genre, mood)
+- Be spoiler-safe unless asked
+- Keep responses helpful and enthusiastic
+- You can recommend movies, series, or music
 `,
       },
     ],
@@ -111,9 +138,22 @@ function isRecommendationRequest(prompt) {
   const lower = prompt.toLowerCase();
   const keywords = [
     'recommend', 'suggest', 'what to watch', 'best movie', 'good series',
-    'top rated', 'should i watch', 'looking for', 'any good', 'popular'
+    'top rated', 'should i watch', 'looking for', 'any good', 'popular',
+    'action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 'sci-fi'
   ];
   return keywords.some(kw => lower.includes(kw));
+}
+
+// Extract genre from prompt
+function extractGenre(prompt) {
+  const lower = prompt.toLowerCase();
+  const genres = ['action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 'sci-fi', 'fantasy', 'animation', 'documentary'];
+  for (const genre of genres) {
+    if (lower.includes(genre)) {
+      return genre;
+    }
+  }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -144,23 +184,39 @@ export default async function handler(req, res) {
     let memory = loadMemory(userId);
     memory.conversation.push({ role: "user", content: prompt });
 
-    // 🔍 Search for recommendations if user asks
+    // 🔍 Search for real recommendations from your database
     let searchResults = [];
     if (isRecommendationRequest(prompt)) {
-      let searchQuery = 'popular';
-      const genres = ['action', 'comedy', 'drama', 'horror', 'romance', 'sci-fi', 'thriller', 'music'];
-      for (const genre of genres) {
-        if (prompt.toLowerCase().includes(genre)) {
-          searchQuery = genre;
-          break;
+      const genre = extractGenre(prompt);
+      let searchQuery = genre || 'movie';
+      
+      // Try searching with genre first
+      searchResults = await searchMaxMovies(searchQuery);
+      
+      // If no results, try 'popular'
+      if (searchResults.length === 0) {
+        searchResults = await searchMaxMovies('popular');
+      }
+      
+      // If still no results, get trending
+      if (searchResults.length === 0) {
+        const trending = await getTrending();
+        if (trending && trending.length > 0) {
+          searchResults = trending.slice(0, 3).map(item => ({
+            subjectId: item.subjectId,
+            title: item.title,
+            cover: item.cover?.url,
+            rating: item.imdbRatingValue,
+            subjectType: item.subjectType
+          }));
         }
       }
-      searchResults = await searchMaxMovies(searchQuery);
     }
 
+    // Build search context for AI
     let searchContext = "";
     if (searchResults.length > 0) {
-      searchContext = `\n\nI found these titles from MaxMovies that match the user's request:\n${JSON.stringify(searchResults, null, 2)}\n\nProvide a helpful recommendation for each (2-3 sentences per title). Then include the thumbnail data using the format: ---THUMBNAILS---[json]---END---`;
+      searchContext = `\n\nHere are REAL titles from the MaxMovies database that match the user's request. Use these to inform your recommendations:\n${JSON.stringify(searchResults, null, 2)}\n\nWrite natural recommendations about these titles. Do NOT include any JSON or thumbnail markers in your response - just natural text.`;
     }
 
     const promptText = `
@@ -170,7 +226,12 @@ User's message: ${prompt}
 
 ${searchContext}
 
-Respond in a friendly, helpful tone about movies, series, and music.
+Instructions:
+- Write helpful, natural recommendations
+- Explain WHY each title is worth watching
+- Keep it conversational and friendly
+- DO NOT include any JSON, code blocks, or special formatting for thumbnails
+- Just write normal paragraphs
 `;
 
     const geminiResponse = await fetch(
@@ -182,7 +243,7 @@ Respond in a friendly, helpful tone about movies, series, and music.
           contents: [{ role: "user", parts: [{ text: promptText }] }],
           generationConfig: {
             temperature: 0.85,
-            maxOutputTokens: 1000,
+            maxOutputTokens: 800,
           },
         }),
       }
@@ -204,23 +265,6 @@ Respond in a friendly, helpful tone about movies, series, and music.
       });
     }
 
-    // Extract thumbnails from response
-    let thumbnails = [];
-    const thumbnailMatch = fullResponse.match(/---THUMBNAILS---\n?([\s\S]*?)\n?---END---/);
-    if (thumbnailMatch && thumbnailMatch[1]) {
-      try {
-        thumbnails = JSON.parse(thumbnailMatch[1]);
-        fullResponse = fullResponse.replace(/---THUMBNAILS---[\s\S]*?---END---/, '').trim();
-      } catch (e) {
-        console.error("Failed to parse thumbnails:", e);
-      }
-    }
-
-    // If AI didn't generate thumbnails but we have search results, use them
-    if (thumbnails.length === 0 && searchResults.length > 0) {
-      thumbnails = searchResults.slice(0, 3);
-    }
-
     const cleanText = fullResponse.replace(/as an ai|language model/gi, "");
     memory.conversation.push({ role: "assistant", content: cleanText });
     
@@ -230,9 +274,17 @@ Respond in a friendly, helpful tone about movies, series, and music.
     
     saveMemory(userId, memory);
 
+    // Return thumbnails separately (NOT clickable URLs, just data)
+    // The frontend will render them as non-clickable cards
     return res.status(200).json({ 
       reply: cleanText,
-      thumbnails: thumbnails.slice(0, 3)
+      recommendations: searchResults.slice(0, 3).map(item => ({
+        subjectId: item.subjectId,
+        title: item.title,
+        cover: item.cover || item.thumbnail,
+        rating: item.rating,
+        type: item.subjectType === 2 ? 'series' : (item.subjectType === 3 ? 'music' : 'movie')
+      }))
     });
     
   } catch (err) {
