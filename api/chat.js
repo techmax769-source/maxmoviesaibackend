@@ -41,7 +41,7 @@ function loadMemory(userId) {
     console.error(`❌ Failed to load memory for ${userId}:`, err);
   }
 
-  // Default memory (your existing system prompt - keeping it identical)
+  // Default memory
   return {
     userId,
     lastProject: null,
