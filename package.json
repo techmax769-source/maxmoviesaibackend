@@ -1,0 +1,13 @@
+{
+  "name": "maxmovies-backend-vercel",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MaxMovies AI Backend for Vercel",
+  "scripts": {
+    "vercel-build": "echo 'Building...'"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": "18.x"
+  }
+}
