@@ -1,33 +1,63 @@
 import fs from "fs";
 import path from "path";
 
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 const MAXMOVIES_API = "https://maxmoviesbackend.vercel.app/api/v2";
 const SITE_URL = "https://maxmovies-254.vercel.app";
 
 const MEMORY_DIR = "/tmp/memory";
 if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR);
 
+// Better rate limiting - more generous limits
 const rateLimitStore = new Map();
 
 function checkRateLimit(userId) {
   const now = Date.now();
   const userRequests = rateLimitStore.get(userId) || [];
-  const recentRequests = userRequests.filter(timestamp => now - timestamp < 30000);
   
-  if (recentRequests.length >= 8) {
+  // Clean old requests (older than 60 seconds)
+  const recentRequests = userRequests.filter(timestamp => now - timestamp < 60000);
+  
+  // Allow 15 requests per minute (more reasonable)
+  if (recentRequests.length >= 15) {
     const oldestRequest = recentRequests[0];
-    const waitTime = Math.ceil((oldestRequest + 30000 - now) / 1000);
+    const waitTime = Math.ceil((oldestRequest + 60000 - now) / 1000);
     return { allowed: false, waitTime };
   }
   
   recentRequests.push(now);
   rateLimitStore.set(userId, recentRequests);
+  
+  // Clean up old entries every 5 minutes
+  if (Math.random() < 0.01) {
+    for (const [uid, timestamps] of rateLimitStore.entries()) {
+      const fresh = timestamps.filter(t => now - t < 60000);
+      if (fresh.length === 0) {
+        rateLimitStore.delete(uid);
+      } else {
+        rateLimitStore.set(uid, fresh);
+      }
+    }
+  }
+  
   return { allowed: true };
 }
 
-// 🔍 Search MaxMovies API
+// 🔍 Search MaxMovies API with caching
+const searchCache = new Map();
+
 async function searchMaxMovies(query, limit = 6) {
+  const cacheKey = `${query}_${limit}`;
+  
+  // Check cache first (5 minute TTL)
+  if (searchCache.has(cacheKey)) {
+    const { data, timestamp } = searchCache.get(cacheKey);
+    if (Date.now() - timestamp < 300000) { // 5 minutes
+      return data;
+    }
+    searchCache.delete(cacheKey);
+  }
+  
   try {
     const searchUrl = `${MAXMOVIES_API}/search/${encodeURIComponent(query)}`;
     const response = await fetch(searchUrl);
@@ -39,7 +69,7 @@ async function searchMaxMovies(query, limit = 6) {
     
     if (items.length === 0) return [];
     
-    return items.slice(0, limit).map(item => {
+    const results = items.slice(0, limit).map(item => {
       let type = 'movie';
       let typeDisplay = 'MOVIE';
       
@@ -62,20 +92,38 @@ async function searchMaxMovies(query, limit = 6) {
       };
     });
     
+    // Store in cache
+    searchCache.set(cacheKey, { data: results, timestamp: Date.now() });
+    
+    return results;
+    
   } catch (err) {
     console.error("Search error:", err);
     return [];
   }
 }
 
+// Optimized memory loading with error recovery
 function loadMemory(userId) {
   const filePath = path.join(MEMORY_DIR, `memory_${userId}.json`);
   try {
     if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      const data = fs.readFileSync(filePath, "utf-8");
+      const memory = JSON.parse(data);
+      
+      // Limit conversation history to prevent memory bloat
+      if (memory.conversation && memory.conversation.length > 15) {
+        memory.conversation = memory.conversation.slice(-15);
+      }
+      
+      return memory;
     }
   } catch (err) {
     console.error(`Failed to load memory:`, err);
+    // If memory is corrupted, delete it and start fresh
+    try {
+      fs.unlinkSync(filePath);
+    } catch(e) {}
   }
 
   return {
@@ -97,8 +145,6 @@ function loadMemory(userId) {
 - If user speaks Swahili → respond in Swahili
 - If user speaks Sheng → respond in Sheng
 - Match their vibe and slang exactly
-- Don't force Sheng if user is speaking pure English
-- Don't force English if user is speaking Swahili
 
 📌 WHAT YOU KNOW ABOUT MAXMOVIES WEBSITE:
 
@@ -133,7 +179,6 @@ FAQ:
 - Account? No account required - everything saves in browser
 - App? Coming soon! Check Downloads page for countdown
 - Subtitles? Yes, look for Subtitles button in player
-- Download app? Being developed - check countdown on Downloads page
 
 MUSIC GENRES DETAILS:
 Classical 🎻, Reggaetone 🎤, RnB 🎸, Arbantone 🎧, Gengetone 🥁, Afro Beats 🪘, Pop 🎹, Gospel 🙏, Instrumental 🎺
@@ -156,13 +201,32 @@ Be helpful, natural, and match the user's language vibe! 🍿`,
   };
 }
 
+// Throttled memory saving - don't save on every request
+const saveQueue = new Map();
+let saveTimeout = null;
+
 function saveMemory(userId, memory) {
-  const filePath = path.join(MEMORY_DIR, `memory_${userId}.json`);
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(memory, null, 2), "utf-8");
-  } catch (err) {
-    console.error(`Failed to save memory:`, err);
-  }
+  // Queue the save instead of doing it immediately
+  saveQueue.set(userId, memory);
+  
+  if (saveTimeout) clearTimeout(saveTimeout);
+  
+  saveTimeout = setTimeout(() => {
+    for (const [uid, mem] of saveQueue.entries()) {
+      const filePath = path.join(MEMORY_DIR, `memory_${uid}.json`);
+      try {
+        // Limit conversation size before saving
+        if (mem.conversation && mem.conversation.length > 15) {
+          mem.conversation = mem.conversation.slice(-15);
+        }
+        fs.writeFileSync(filePath, JSON.stringify(mem, null, 2), "utf-8");
+      } catch (err) {
+        console.error(`Failed to save memory:`, err);
+      }
+    }
+    saveQueue.clear();
+    saveTimeout = null;
+  }, 3000); // Save after 3 seconds of inactivity
 }
 
 // Detect language of the prompt
@@ -230,7 +294,7 @@ export default async function handler(req, res) {
     const rateCheck = checkRateLimit(userId);
     if (!rateCheck.allowed) {
       return res.status(429).json({ 
-        error: `⏰ Chill for ${rateCheck.waitTime} seconds, bro!` 
+        error: `⏰ Take a ${rateCheck.waitTime} sec break! Too many messages.`
       });
     }
 
@@ -242,7 +306,6 @@ export default async function handler(req, res) {
     
     let searchResults = [];
     
-    // Extract search topic for recommendations
     const searchTopic = extractSearchTopic(prompt);
     if (searchTopic && searchTopic.length > 2 && !isCreatorQuestion) {
       searchResults = await searchMaxMovies(searchTopic, 6);
@@ -257,7 +320,6 @@ export default async function handler(req, res) {
       searchContext = `\n\nFound these from MaxMovies: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. Match user's language (${detectedLanguage === 'swahili' ? 'respond in Swahili/Sheng' : 'respond in English'}). Keep it friendly.`;
     }
 
-    // Special response for creator questions
     let creatorResponse = "";
     if (isCreatorQuestion) {
       if (detectedLanguage === 'swahili') {
@@ -287,9 +349,7 @@ WEBSITE INFO (MaxMovies):
 CRITICAL INSTRUCTION FOR LANGUAGE:
 - User is speaking ${detectedLanguage === 'swahili' ? 'Swahili/Sheng' : 'English'}
 - YOU MUST RESPOND IN ${detectedLanguage === 'swahili' ? 'SWAHILI/SHENG' : 'ENGLISH'}
-- Match their exact vibe - if they use Sheng, use Sheng back
-- If they use pure Swahili, respond in Swahili
-- If they use English, respond in English
+- Match their exact vibe
 - DO NOT mix languages unnecessarily
 
 RESPONSE STYLE:
@@ -298,11 +358,14 @@ RESPONSE STYLE:
 - Be helpful and friendly
 - When giving titles, use **bold**
 - NEVER say "as an AI" or "language model"
-- Be enthusiastic about recommendations
 
 Answer the user's question naturally about entertainment or MaxMovies. Be friendly and match their language! 🎬
 `;
 
+    // Call Gemini API with timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    
     const geminiResponse = await fetch(
       `${GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`,
       {
@@ -315,17 +378,24 @@ Answer the user's question naturally about entertainment or MaxMovies. Be friend
             maxOutputTokens: 500,
           },
         }),
+        signal: controller.signal,
       }
     );
+    
+    clearTimeout(timeoutId);
 
     if (!geminiResponse.ok) {
-      // Return error message in user's language without emojis
+      console.error(`Gemini API error: ${geminiResponse.status}`);
       const errorMsg = detectedLanguage === 'swahili' 
         ? "Samahani! Server imejaa. Jaribu tena baadaye!"
         : "Whoops! Server busy. Try again later!";
+      
+      // Save memory even on error
+      saveMemory(userId, memory);
+      
       return res.status(503).json({ 
         reply: errorMsg,
-        error: errorMsg 
+        recommendations: searchResults.slice(0, 6)
       });
     }
 
@@ -334,11 +404,14 @@ Answer the user's question naturally about entertainment or MaxMovies. Be friend
 
     if (!fullResponse) {
       const errorMsg = detectedLanguage === 'swahili' 
-        ? "Samahani! Server imejaa. Jaribu tena baadaye!"
-        : "Whoops! Server busy. Try again later!";
+        ? "Samahani! Hakuna majibu. Jaribu tena!"
+        : "Sorry! No response. Try again!";
+      
+      saveMemory(userId, memory);
+      
       return res.status(503).json({ 
         reply: errorMsg,
-        error: errorMsg 
+        recommendations: searchResults.slice(0, 6)
       });
     }
 
@@ -348,7 +421,6 @@ Answer the user's question naturally about entertainment or MaxMovies. Be friend
     cleanText = cleanText.replace(/Google/gi, '');
     cleanText = cleanText.replace(/Gemini/gi, 'MaxMovies AI');
     
-    // Add clickable links for movie titles from search results
     if (searchResults.length > 0) {
       searchResults.forEach(movie => {
         if (movie.title && movie.title.length > 2) {
@@ -361,10 +433,12 @@ Answer the user's question naturally about entertainment or MaxMovies. Be friend
     
     memory.conversation.push({ role: "assistant", content: cleanText });
     
-    if (memory.conversation.length > 20) {
-      memory.conversation = memory.conversation.slice(-18);
+    // Limit conversation size
+    if (memory.conversation.length > 15) {
+      memory.conversation = memory.conversation.slice(-15);
     }
     
+    // Throttled save
     saveMemory(userId, memory);
 
     const recommendations = searchResults.slice(0, 6).map(item => ({
@@ -383,10 +457,18 @@ Answer the user's question naturally about entertainment or MaxMovies. Be friend
     
   } catch (err) {
     console.error("Server error:", err);
-    // Return error message without emojis
+    
+    // Handle timeout errors specifically
+    if (err.name === 'AbortError') {
+      return res.status(503).json({ 
+        reply: "Request timeout! Try again.",
+        error: "Timeout"
+      });
+    }
+    
     return res.status(503).json({ 
       reply: "Whoops! Server busy. Try again later!",
-      error: "Whoops! Server busy. Try again later!" 
+      error: err.message 
     });
   }
 }
