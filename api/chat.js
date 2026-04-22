@@ -102,13 +102,14 @@ function loadMemory(userId) {
     conversation: [
       {
         role: "system",
-        content: `You are MaxMovies AI - a FUN movie expert!
+        content: `You are MaxMovies AI - a fun movie expert.
 
 RULES:
-- Use **bold** around movie titles like **John Wick**
+- Use **bold** around movie/series titles
 - Use emojis 🎬 🍿 🔥
 - Keep it short and exciting
-- Say if it's a MOVIE or SERIES`,
+- DO NOT write (MOVIE) or (SERIES) after titles - it looks ugly
+- Just write naturally like a cool friend talking about movies`,
       },
     ],
   };
@@ -176,7 +177,7 @@ export default async function handler(req, res) {
 
     let searchContext = "";
     if (searchResults.length > 0) {
-      searchContext = `\n\nFound these in database: ${JSON.stringify(searchResults)}\n\nRespond with SHORT, EXCITING info. Use **bold** around every title. Use emojis.`;
+      searchContext = `\n\nFound these: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. NO (MOVIE) or (SERIES) tags. Just be cool and fun.`;
     }
 
     const promptText = `
@@ -185,12 +186,13 @@ User asked: "${prompt}"
 ${searchContext}
 
 INSTRUCTIONS:
-- Use **bold** around EVERY movie/series title like **Wrong Turn**
-- Keep responses SHORT and EXCITING
+- Use **bold** around movie/series titles like **Chicago Fire**
+- Keep responses SHORT and FUN
 - Use emojis 🎬 🍿 🔥
-- Say if it's a MOVIE or SERIES
+- NEVER write "(MOVIE)" or "(SERIES)" after titles - it's annoying
+- Just write naturally like you're talking to a friend
 
-Example: "🎬 **John Wick** (MOVIE) - Pure adrenaline 🔥"
+Example: "🎬 **John Wick** is pure adrenaline 🔥 The action scenes are insane!"
 
 Go!
 `;
@@ -203,7 +205,7 @@ Go!
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: promptText }] }],
           generationConfig: {
-            temperature: 0.9,
+            temperature: 0.85,
             maxOutputTokens: 500,
           },
         }),
@@ -223,17 +225,22 @@ Go!
       return res.status(503).json({ error: "🎬 No response. Try again!" });
     }
 
-    // FIXED: Convert **text** to actual HTML bold
+    // Convert **text** to HTML bold
     let cleanText = fullResponse.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     cleanText = cleanText.replace(/as an ai|language model/gi, "");
     
-    // Add clickable links for matching titles
+    // Remove any stray (MOVIE) or (SERIES) tags that might appear
+    cleanText = cleanText.replace(/\(MOVIE\)/gi, '');
+    cleanText = cleanText.replace(/\(SERIES\)/gi, '');
+    cleanText = cleanText.replace(/\(TV Series\)/gi, '');
+    
+    // Add clickable links for matching titles (without adding extra text)
     if (searchResults.length > 0) {
       searchResults.forEach(movie => {
         if (movie.title && movie.title.length > 2) {
           // Match the bolded title in the response
           const boldPattern = new RegExp(`<strong>${escapeRegex(movie.title)}</strong>`, 'gi');
-          const link = `<a href="${SITE_URL}/#detail/${movie.subjectId}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">${movie.title}</a> <span style="font-size: 0.7rem; color: #8b949e;">(${movie.typeDisplay})</span>`;
+          const link = `<a href="${SITE_URL}/#detail/${movie.subjectId}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">${movie.title}</a>`;
           cleanText = cleanText.replace(boldPattern, link);
         }
       });
