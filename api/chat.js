@@ -83,14 +83,22 @@ function loadMemory(userId) {
     conversation: [
       {
         role: "system",
-        content: `You are MaxMovies AI, a jovial movie buddy who knows everything about MaxMovies website.
+        content: `You are MaxMovies AI, a jovial entertainment buddy who knows everything about MaxMovies website.
 
 🚨 YOUR IDENTITY & PERSONALITY:
 - Name: MaxMovies AI (never call yourself anything else)
-- Personality: Jovial, friendly, uses Sheng (Kenyan slang) and informal English
-- Use emojis freely: 🎬 🍿 🔥 💯 😎 🙌 💪 🎵
-- NEVER use formal/robotic language - be casual like a friend
+- Personality: Jovial, friendly, conversational
+- Use emojis naturally: 🎬 🍿 🔥 💯 😎 🙌 💪 🎵
+- NEVER use formal/robotic language - be natural like a friend
 - NEVER say "as an AI" or "language model" - just be natural
+
+🎯 LANGUAGE MATCHING (CRITICAL):
+- If user speaks English → respond in English
+- If user speaks Swahili → respond in Swahili
+- If user speaks Sheng → respond in Sheng
+- Match their vibe and slang exactly
+- Don't force Sheng if user is speaking pure English
+- Don't force English if user is speaking Swahili
 
 📌 WHAT YOU KNOW ABOUT MAXMOVIES WEBSITE:
 
@@ -130,26 +138,19 @@ FAQ:
 MUSIC GENRES DETAILS:
 Classical 🎻, Reggaetone 🎤, RnB 🎸, Arbantone 🎧, Gengetone 🥁, Afro Beats 🪘, Pop 🎹, Gospel 🙏, Instrumental 🎺
 
-RESPONSE STYLE RULES:
-- Be jovial and fun! Use phrases like: "Sasa!", "Vipi mtu!", "Fiti!", "Safi!", "Kuu!", "Kabisa!"
-- Mix Sheng and informal English naturally
-- Use emojis to express energy
-- Keep responses conversational, not robotic
-- NEVER use formal greetings like "Greetings" or "Hello, I am"
-- Start naturally: "Yo!", "Sasa!", "Vipi!", "Hey!"
+RESPONSE STYLE:
+- Be natural and conversational
+- Match user's language (English/Swahili/Sheng)
+- Be helpful and friendly
 - When giving movie titles, put them in **bold**
-- For recommendations, be enthusiastic: "Let me put you on! 🔥"
-
-WEBSITE-ONLY RULE:
-If asked about anything NOT related to MaxMovies (sports, news, politics, random facts, etc.), politely redirect:
-"Eh, I'm strictly MaxMovies AI fam! I only know about movies, series, music, and everything on MaxMovies. 🎬 Ask me about what to watch or how to use the site!"
+- Be enthusiastic about recommendations
 
 ABOUT YOUR CREATOR (only answer if directly asked):
-If asked "who made you" or "who created you", say: "I was created by Max, a 21-year-old developer from Kenya! He built me to be your movie buddy. 🎬"
+If asked "who made you" or "who created you", say: "I was created by Max, a 21-year-old developer from Kenya! 🎬"
 
 NEVER volunteer creator info unless asked directly.
 
-Be helpful, energetic, and make every conversation feel like talking to a friend who loves movies! 🍿`,
+Be helpful, natural, and match the user's language vibe! 🍿`,
       },
     ],
   };
@@ -164,73 +165,41 @@ function saveMemory(userId, memory) {
   }
 }
 
+// Detect language of the prompt
+function detectLanguage(prompt) {
+  const swahiliWords = ['habari', 'asante', 'sawa', 'tafadhali', 'ndiyo', 'hapana', 'karibu', 'pole', 'samahani', 'kwaheri', 'jina', 'rafiki', 'mambo', 'vipi', 'sasa', 'nini', 'kumbe', 'sijui', 'mbaya', 'freshi', 'tamu', 'choma', 'mchele', 'fiti', 'safi', 'poa', 'kuu', 'kabisa', 'mzuka', 'kubwa', 'bana', 'wacha'];
+  
+  const lowerPrompt = prompt.toLowerCase();
+  let swahiliCount = 0;
+  
+  for (const word of swahiliWords) {
+    if (lowerPrompt.includes(word)) {
+      swahiliCount++;
+    }
+  }
+  
+  if (swahiliCount >= 2) {
+    return 'swahili';
+  }
+  
+  return 'english';
+}
+
 // Check if user is asking about creator
 function isAskingAboutCreator(prompt) {
   const lower = prompt.toLowerCase();
   const creatorKeywords = [
     'who made you', 'who built you', 'who created you', 'your creator',
     'who developed you', 'who programmed you', 'who is your maker',
-    'who wrote you', 'who designed you', 'who made maxmovies ai'
+    'who wrote you', 'who designed you', 'who made maxmovies ai',
+    'uliundwa na nani', 'nani aliyekutengeneza'
   ];
   return creatorKeywords.some(keyword => lower.includes(keyword));
 }
 
-// Check if query is about the website
-function isWebsiteRelated(prompt) {
-  const lower = prompt.toLowerCase();
-  
-  const websiteKeywords = [
-    'maxmovies', 'movie', 'series', 'film', 'show', 'watch', 'recommend', 
-    'suggest', 'action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 
-    'sci-fi', 'actor', 'actress', 'director', 'cast', 'plot', 'season', 
-    'episode', 'best', 'top', 'rated', 'oscar', 'download', 'stream', 
-    'quality', 'subtitle', 'library', 'music', 'live tv', 'channel',
-    'free', 'account', 'sign up', 'login', 'app', 'how to', 'help',
-    'trending', 'upcoming', 'release', 'kenyan', 'afro', 'reggaetone', 
-    'arbantone', 'gengetone', 'rnb', 'classical', 'pop', 'gospel', 'instrumental',
-    'my list', 'continue watching', 'recently watched'
-  ];
-  
-  for (const keyword of websiteKeywords) {
-    if (lower.includes(keyword)) {
-      return true;
-    }
-  }
-  
-  // Check for capitalized words (potential movie names)
-  const words = prompt.split(' ');
-  for (const word of words) {
-    if (word.length > 3 && word[0] === word[0].toUpperCase() && word[0] !== word[0].toLowerCase()) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-// Check if user is asking about movies/series specifically
-function isMovieQuery(prompt) {
-  const lower = prompt.toLowerCase();
-  
-  const movieKeywords = [
-    'movie', 'series', 'film', 'show', 'watch', 'recommend', 'suggest',
-    'action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 'sci-fi',
-    'actor', 'actress', 'director', 'cast', 'plot', 'ending', 'season', 'episode',
-    'best', 'top', 'rated', 'oscar'
-  ];
-  
-  for (const keyword of movieKeywords) {
-    if (lower.includes(keyword)) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
 function extractSearchTopic(prompt) {
-  let topic = prompt.replace(/what is|tell me about|info on|search for|find|look up|show me|recommend|suggest|best|good|top|movie|series|film|show/gi, '');
-  topic = topic.replace(/about/gi, '');
+  let topic = prompt.replace(/what is|tell me about|info on|search for|find|look up|show me|recommend|suggest|best|good|top|movie|series|film|show|nipe|tazama|onyesha|tafuta/gi, '');
+  topic = topic.replace(/about|kuhusu/gi, '');
   topic = topic.trim();
   if (topic.length < 2) return null;
   return topic;
@@ -268,52 +237,46 @@ export default async function handler(req, res) {
     let memory = loadMemory(userId);
     memory.conversation.push({ role: "user", content: prompt });
 
-    // Check if query is website-related
-    const isWebsiteRelatedQuery = isWebsiteRelated(prompt);
-    const isMovieRelated = isMovieQuery(prompt);
     const isCreatorQuestion = isAskingAboutCreator(prompt);
+    const detectedLanguage = detectLanguage(prompt);
     
     let searchResults = [];
     
-    // ONLY search for movies if the query is about movies AND website-related
-    if (isWebsiteRelatedQuery && isMovieRelated && !isCreatorQuestion) {
-      const searchTopic = extractSearchTopic(prompt);
-      if (searchTopic && searchTopic.length > 2) {
-        searchResults = await searchMaxMovies(searchTopic, 6);
-      }
-      
-      if (searchResults.length === 0) {
-        searchResults = await searchMaxMovies('popular', 6);
-      }
+    // Extract search topic for recommendations
+    const searchTopic = extractSearchTopic(prompt);
+    if (searchTopic && searchTopic.length > 2 && !isCreatorQuestion) {
+      searchResults = await searchMaxMovies(searchTopic, 6);
+    }
+    
+    if (searchResults.length === 0 && !isCreatorQuestion) {
+      searchResults = await searchMaxMovies('popular', 6);
     }
 
     let searchContext = "";
     if (searchResults.length > 0) {
-      searchContext = `\n\nFound these movies/series from MaxMovies: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. Keep it short, fun, and use Sheng/emoji vibes.`;
+      searchContext = `\n\nFound these from MaxMovies: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. Match user's language (${detectedLanguage === 'swahili' ? 'respond in Swahili/Sheng' : 'respond in English'}). Keep it friendly.`;
     }
 
     // Special response for creator questions
     let creatorResponse = "";
     if (isCreatorQuestion) {
-      creatorResponse = "I was created by Max, a 21-year-old developer from Kenya! He built me to be your movie buddy. 🎬";
-    }
-
-    // Redirect non-website queries
-    let redirectResponse = "";
-    if (!isWebsiteRelatedQuery && !isCreatorQuestion) {
-      redirectResponse = "Eh, I'm strictly MaxMovies AI fam! I only know about movies, series, music, and everything on MaxMovies. 🎬\n\nAsk me about:\n• What to watch 🍿\n• How to stream/download 📥\n• Music Zone 🎵\n• Live TV 📺\n• Or just vibes about entertainment!\n\nWhat movie or series you looking for today? 😎";
+      if (detectedLanguage === 'swahili') {
+        creatorResponse = "Niliundwa na Max, developer wa miaka 21 kutoka Kenya! 🎬";
+      } else {
+        creatorResponse = "I was created by Max, a 21-year-old developer from Kenya! 🎬";
+      }
     }
 
     const promptText = `
 User asked: "${prompt}"
 
-${redirectResponse ? `IMPORTANT: The user asked about something NOT related to MaxMovies. Answer with EXACTLY this: "${redirectResponse}"` : ""}
+Detected language: ${detectedLanguage === 'swahili' ? 'Swahili/Sheng' : 'English'}
 
-${creatorResponse ? `SPECIAL INSTRUCTION: Answer with: "${creatorResponse}"` : ""}
+${creatorResponse ? `SPECIAL INSTRUCTION: Answer with EXACTLY this: "${creatorResponse}"` : ""}
 
 ${searchContext}
 
-WEBSITE CONTEXT (only relevant if user asks about MaxMovies features):
+WEBSITE INFO (MaxMovies):
 - Name: MaxMovies - Premium Stream/Download
 - URL: ${SITE_URL}
 - Features: Streaming (360p-1080p), Downloads (app coming), Music Zone (9 genres), Live TV, Library, Search
@@ -321,17 +284,23 @@ WEBSITE CONTEXT (only relevant if user asks about MaxMovies features):
 - Free? YES! No account needed
 - App: Coming soon - check Downloads page
 
-RESPONSE STYLE REQUIREMENTS:
-- Be JOVIAL and FRIENDLY (like a movie buddy)
-- Use SHENG and informal English: "Sasa!", "Vipi!", "Fiti!", "Safi!", "Kuu!", "Kabisa!"
-- Use EMOJIS: 🎬 🍿 🔥 💯 😎 🙌 💪 🎵 🎶
-- NEVER be formal or robotic
-- NEVER say "as an AI" or "language model"
-- Keep responses conversational and energetic
-- When giving movie titles, put them in **bold**
-- Be enthusiastic about recommendations: "Let me put you on! 🔥"
+CRITICAL INSTRUCTION FOR LANGUAGE:
+- User is speaking ${detectedLanguage === 'swahili' ? 'Swahili/Sheng' : 'English'}
+- YOU MUST RESPOND IN ${detectedLanguage === 'swahili' ? 'SWAHILI/SHENG' : 'ENGLISH'}
+- Match their exact vibe - if they use Sheng, use Sheng back
+- If they use pure Swahili, respond in Swahili
+- If they use English, respond in English
+- DO NOT mix languages unnecessarily
 
-${!redirectResponse && !creatorResponse ? "Answer the user's question naturally about movies, series, or MaxMovies features. Be jovial and fun!" : ""}
+RESPONSE STYLE:
+- Be natural and conversational like a friend
+- Use emojis naturally 🎬 🍿 🔥
+- Be helpful and friendly
+- When giving titles, use **bold**
+- NEVER say "as an AI" or "language model"
+- Be enthusiastic about recommendations
+
+Answer the user's question naturally about entertainment or MaxMovies. Be friendly and match their language! 🎬
 `;
 
     const geminiResponse = await fetch(
@@ -350,10 +319,13 @@ ${!redirectResponse && !creatorResponse ? "Answer the user's question naturally 
     );
 
     if (!geminiResponse.ok) {
-      // Return the exact error message without emojis as requested
+      // Return error message in user's language without emojis
+      const errorMsg = detectedLanguage === 'swahili' 
+        ? "Samahani! Server imejaa. Jaribu tena baadaye!"
+        : "Whoops! Server busy. Try again later!";
       return res.status(503).json({ 
-        reply: "Whoops! Server busy. Try again later!",
-        error: "Whoops! Server busy. Try again later!" 
+        reply: errorMsg,
+        error: errorMsg 
       });
     }
 
@@ -361,9 +333,12 @@ ${!redirectResponse && !creatorResponse ? "Answer the user's question naturally 
     let fullResponse = result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     if (!fullResponse) {
+      const errorMsg = detectedLanguage === 'swahili' 
+        ? "Samahani! Server imejaa. Jaribu tena baadaye!"
+        : "Whoops! Server busy. Try again later!";
       return res.status(503).json({ 
-        reply: "Whoops! Server busy. Try again later!",
-        error: "Whoops! Server busy. Try again later!" 
+        reply: errorMsg,
+        error: errorMsg 
       });
     }
 
@@ -392,14 +367,14 @@ ${!redirectResponse && !creatorResponse ? "Answer the user's question naturally 
     
     saveMemory(userId, memory);
 
-    const recommendations = (isWebsiteRelatedQuery && isMovieRelated && !isCreatorQuestion) ? searchResults.slice(0, 6).map(item => ({
+    const recommendations = searchResults.slice(0, 6).map(item => ({
       subjectId: item.subjectId,
       title: item.title,
       cover: item.cover,
       rating: item.rating,
       type: item.type,
       typeDisplay: item.typeDisplay
-    })) : [];
+    }));
 
     return res.status(200).json({ 
       reply: cleanText,
@@ -408,7 +383,7 @@ ${!redirectResponse && !creatorResponse ? "Answer the user's question naturally 
     
   } catch (err) {
     console.error("Server error:", err);
-    // Return exact error message without emojis as requested
+    // Return error message without emojis
     return res.status(503).json({ 
       reply: "Whoops! Server busy. Try again later!",
       error: "Whoops! Server busy. Try again later!" 
