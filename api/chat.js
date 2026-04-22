@@ -39,6 +39,7 @@ async function searchMaxMovies(query, limit = 6) {
     
     if (items.length === 0) return [];
     
+    // Return ALL results (up to limit) - dynamic count
     return items.slice(0, limit).map(item => {
       let type = 'movie';
       let typeDisplay = 'MOVIE';
@@ -102,14 +103,14 @@ function loadMemory(userId) {
     conversation: [
       {
         role: "system",
-        content: `You are MaxMovies AI - a fun movie expert.
+        content: `You are MaxMovies AI - a chill movie expert.
 
 RULES:
 - Use **bold** around movie/series titles
-- Use emojis 🎬 🍿 🔥
-- Keep it short and exciting
-- DO NOT write (MOVIE) or (SERIES) after titles - it looks ugly
-- Just write naturally like a cool friend talking about movies`,
+- Use emojis naturally 🎬 🍿 🔥
+- Keep it short and conversational
+- Be direct - no cheesy phrases
+- Just talk like a friend who knows movies`,
       },
     ],
   };
@@ -177,7 +178,7 @@ export default async function handler(req, res) {
 
     let searchContext = "";
     if (searchResults.length > 0) {
-      searchContext = `\n\nFound these: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. NO (MOVIE) or (SERIES) tags. Just be cool and fun.`;
+      searchContext = `\n\nFound these: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. Be direct and conversational. No cheesy phrases.`;
     }
 
     const promptText = `
@@ -187,12 +188,12 @@ ${searchContext}
 
 INSTRUCTIONS:
 - Use **bold** around movie/series titles like **Chicago Fire**
-- Keep responses SHORT and FUN
-- Use emojis 🎬 🍿 🔥
-- NEVER write "(MOVIE)" or "(SERIES)" after titles - it's annoying
-- Just write naturally like you're talking to a friend
+- Keep responses SHORT and NATURAL
+- Use emojis occasionally 🎬 🍿 🔥
+- Be direct - no "grab your popcorn" or cheesy lines
+- Just talk like a normal person who knows movies
 
-Example: "🎬 **John Wick** is pure adrenaline 🔥 The action scenes are insane!"
+Example: "**John Wick** is pure adrenaline 🔥 The action is insane."
 
 Go!
 `;
@@ -229,16 +230,15 @@ Go!
     let cleanText = fullResponse.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     cleanText = cleanText.replace(/as an ai|language model/gi, "");
     
-    // Remove any stray (MOVIE) or (SERIES) tags that might appear
-    cleanText = cleanText.replace(/\(MOVIE\)/gi, '');
-    cleanText = cleanText.replace(/\(SERIES\)/gi, '');
-    cleanText = cleanText.replace(/\(TV Series\)/gi, '');
+    // Remove any cheesy phrases if they slip through
+    cleanText = cleanText.replace(/grab your popcorn/gi, '');
+    cleanText = cleanText.replace(/get ready/i, '');
+    cleanText = cleanText.replace(/here we go/i, '');
     
-    // Add clickable links for matching titles (without adding extra text)
+    // Add clickable links for matching titles
     if (searchResults.length > 0) {
       searchResults.forEach(movie => {
         if (movie.title && movie.title.length > 2) {
-          // Match the bolded title in the response
           const boldPattern = new RegExp(`<strong>${escapeRegex(movie.title)}</strong>`, 'gi');
           const link = `<a href="${SITE_URL}/#detail/${movie.subjectId}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">${movie.title}</a>`;
           cleanText = cleanText.replace(boldPattern, link);
@@ -254,6 +254,8 @@ Go!
     
     saveMemory(userId, memory);
 
+    // Return DYNAMIC number of results (whatever was found, up to 6)
+    // Could be 1, 2, 3, 4, 5, or 6
     return res.status(200).json({ 
       reply: cleanText,
       recommendations: searchResults.slice(0, 6).map(item => ({
