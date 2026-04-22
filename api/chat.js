@@ -26,7 +26,7 @@ function checkRateLimit(userId) {
   return { allowed: true };
 }
 
-// 🔍 Search MaxMovies API - ONLY for movie/series queries
+// 🔍 Search MaxMovies API
 async function searchMaxMovies(query, limit = 6) {
   try {
     const searchUrl = `${MAXMOVIES_API}/search/${encodeURIComponent(query)}`;
@@ -83,22 +83,17 @@ function loadMemory(userId) {
     conversation: [
       {
         role: "system",
-        content: `You are MaxMovies AI, created by Max - a 21-year-old developer from Kenya.
-
-ABOUT YOU:
-- You were built and trained by Max, not Google or any other company
-- You're a helpful, friendly assistant that can do anything - coding, math, explanations, creative writing, etc.
-- Your specialty is movies and series, but you can help with ANY task
+        content: `You are MaxMovies AI, a helpful movie expert.
 
 IMPORTANT RULES:
-- NEVER say you're an AI or language model
-- NEVER mention Google, Gemini, or any other company
-- Always say you were created/made/built by Max
+- NEVER mention who created you unless directly asked
+- If asked "who made you" or "who built you", say you were created by Max, a 21-year-old developer from Kenya
+- Otherwise, just answer questions normally without mentioning your creator
 - Be helpful, conversational, and friendly
 - Use emojis naturally 🎬 🍿 🔥
 
 When users ask about movies/series, give recommendations with **bold titles**.
-When users ask other questions (coding, math, general help), just answer normally without movie stuff.`,
+When users ask other questions, just answer normally.`,
       },
     ],
   };
@@ -113,32 +108,38 @@ function saveMemory(userId, memory) {
   }
 }
 
+// Check if user is asking about creator
+function isAskingAboutCreator(prompt) {
+  const lower = prompt.toLowerCase();
+  const creatorKeywords = [
+    'who made you', 'who built you', 'who created you', 'your creator',
+    'who developed you', 'who programmed you', 'who is your maker',
+    'who wrote you', 'who designed you'
+  ];
+  return creatorKeywords.some(keyword => lower.includes(keyword));
+}
+
 // Check if user is asking about movies/series
 function isMovieQuery(prompt) {
   const lower = prompt.toLowerCase();
   
-  // Keywords that indicate movie/series requests
   const movieKeywords = [
     'movie', 'series', 'film', 'show', 'watch', 'recommend', 'suggest',
     'action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 'sci-fi',
-    'netflix', 'hulu', 'disney', 'hbomax', 'prime', 'streaming',
-    'actor', 'actress', 'director', 'cast', 'scene', 'plot', 'ending',
-    'season', 'episode', 'marvel', 'dc', 'star wars', 'harry potter',
-    'best', 'top', 'rated', 'oscar', 'award'
+    'actor', 'actress', 'director', 'cast', 'plot', 'ending', 'season', 'episode',
+    'best', 'top', 'rated', 'oscar'
   ];
   
-  // Check if any movie keyword is present
   for (const keyword of movieKeywords) {
     if (lower.includes(keyword)) {
       return true;
     }
   }
   
-  // Also check for specific movie/series names (capitalized phrases)
+  // Check for capitalized words (potential movie names)
   const words = prompt.split(' ');
   for (const word of words) {
     if (word.length > 3 && word[0] === word[0].toUpperCase() && word[0] !== word[0].toLowerCase()) {
-      // Could be a proper noun (movie/series name)
       return true;
     }
   }
@@ -147,7 +148,6 @@ function isMovieQuery(prompt) {
 }
 
 function extractSearchTopic(prompt) {
-  // Clean up the prompt to extract the movie/series name
   let topic = prompt.replace(/what is|tell me about|info on|search for|find|look up|show me|recommend|suggest|best|good|top|movie|series|film|show/gi, '');
   topic = topic.replace(/about/gi, '');
   topic = topic.trim();
@@ -190,14 +190,14 @@ export default async function handler(req, res) {
     // ONLY search for movies if the query is about movies/series
     let searchResults = [];
     const isMovieRelated = isMovieQuery(prompt);
+    const isCreatorQuestion = isAskingAboutCreator(prompt);
     
-    if (isMovieRelated) {
+    if (isMovieRelated && !isCreatorQuestion) {
       const searchTopic = extractSearchTopic(prompt);
       if (searchTopic && searchTopic.length > 2) {
         searchResults = await searchMaxMovies(searchTopic, 6);
       }
       
-      // If no results, try a general 'popular' search
       if (searchResults.length === 0) {
         searchResults = await searchMaxMovies('popular', 6);
       }
@@ -208,25 +208,24 @@ export default async function handler(req, res) {
       searchContext = `\n\nFound these movies/series: ${JSON.stringify(searchResults)}\n\nRespond naturally. Use **bold** around titles. Keep it short and fun.`;
     }
 
-    // Build system prompt that hides Google/AI origin
-    const systemInstruction = `You are MaxMovies AI, created by Max (21-year-old developer from Kenya).
-
-NEVER mention Google, AI, language model, or any company.
-Always say you were made/created/built by Max.
-
-Be helpful and conversational. ${searchResults.length > 0 ? 'The user asked about movies/series. Give recommendations with **bold** titles.' : 'Answer normally without movie stuff.'}`;
+    // Special response for creator questions
+    let creatorResponse = "";
+    if (isCreatorQuestion) {
+      creatorResponse = "I was created by Max, a 21-year-old developer from Kenya! He built me to help people find great movies and series. 🎬";
+    }
 
     const promptText = `
 User asked: "${prompt}"
 
+${creatorResponse ? `SPECIAL INSTRUCTION: Answer with: "${creatorResponse}"` : ""}
+
 ${searchContext}
 
 Instructions:
-- NEVER say "as an AI" or "language model"
-- NEVER mention Google or Gemini
-- Say you were made by Max if asked
+- Be helpful and conversational
 - Use emojis naturally 🎬
-- Be short and helpful
+- Keep responses short and fun
+- ${!creatorResponse ? "NEVER mention who created you unless directly asked" : ""}
 `;
 
     const geminiResponse = await fetch(
@@ -236,7 +235,6 @@ Instructions:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: promptText }] }],
-          systemInstruction: { parts: [{ text: systemInstruction }] },
           generationConfig: {
             temperature: 0.85,
             maxOutputTokens: 500,
@@ -258,10 +256,12 @@ Instructions:
       return res.status(503).json({ error: "No response. Try again!" });
     }
 
-    // Clean up any AI mentions
+    // Clean up
     let cleanText = fullResponse.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     cleanText = cleanText.replace(/as an ai|as an AI|language model|i am an ai|i'm an ai/gi, '');
-    cleanText = cleanText.replace(/Google/gi, 'Max');
+    
+    // Remove any stray Google/AI mentions
+    cleanText = cleanText.replace(/Google/gi, '');
     cleanText = cleanText.replace(/Gemini/gi, 'MaxMovies AI');
     
     // Add clickable links for movie titles
@@ -283,8 +283,7 @@ Instructions:
     
     saveMemory(userId, memory);
 
-    // Only return recommendations if it was a movie query AND we found results
-    const recommendations = isMovieRelated ? searchResults.slice(0, 6).map(item => ({
+    const recommendations = isMovieRelated && !isCreatorQuestion ? searchResults.slice(0, 6).map(item => ({
       subjectId: item.subjectId,
       title: item.title,
       cover: item.cover,
