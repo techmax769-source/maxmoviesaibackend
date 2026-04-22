@@ -15,7 +15,7 @@ function checkRateLimit(userId) {
   const userRequests = rateLimitStore.get(userId) || [];
   const recentRequests = userRequests.filter(timestamp => now - timestamp < 30000);
   
-  if (recentRequests.length >= 6) {
+  if (recentRequests.length >= 8) {
     const oldestRequest = recentRequests[0];
     const waitTime = Math.ceil((oldestRequest + 30000 - now) / 1000);
     return { allowed: false, waitTime };
@@ -26,8 +26,8 @@ function checkRateLimit(userId) {
   return { allowed: true };
 }
 
-// 🔍 Search MaxMovies API
-async function searchMaxMovies(query, limit = 5) {
+// 🔍 Search MaxMovies API - returns up to 6 results
+async function searchMaxMovies(query, limit = 6) {
   try {
     const searchUrl = `${MAXMOVIES_API}/search/${encodeURIComponent(query)}`;
     const response = await fetch(searchUrl);
@@ -39,6 +39,7 @@ async function searchMaxMovies(query, limit = 5) {
     
     if (items.length === 0) return [];
     
+    // Return up to 6 items
     return items.slice(0, limit).map(item => ({
       subjectId: item.subjectId,
       title: item.title || 'Untitled',
@@ -55,7 +56,7 @@ async function searchMaxMovies(query, limit = 5) {
   }
 }
 
-// 🎬 Get trending content
+// 🎬 Get trending content as fallback (max 6)
 async function getTrending(limit = 6) {
   try {
     const response = await fetch(`${MAXMOVIES_API}/trending`);
@@ -96,23 +97,11 @@ function loadMemory(userId) {
 - Use emojis 🎬 🍿 🔥 ✨ 😎 🎭 🎨
 - **Bold movie/series titles** using **Title**
 - Keep recommendations under 3 sentences per title
-- Sound like a chill movie buddy, not a robot
-
-📝 RESPONSE FORMAT:
-- Start with a fun emoji reaction
-- Bold each movie/series name using **Title**
-- Give 1-2 sentences WHY it's good
-- Add 🔥 for action, 😂 for comedy, 🎭 for drama, 🎨 for sci-fi
-
-EXAMPLE:
-"🎬 **John Wick 4** - Non-stop action 🔥 The fight scenes are insane!
-🍿 **The Batman** - Dark, gritty detective story that hits different 🎭"
+- Sound like a chill movie buddy
 
 RULES:
 - NEVER over-explain
-- Keep it snappy and fun
-- Use lots of emojis
-- Bold ALL movie/series names
+- Bold ALL movie/series names using **Title**
 - Be spoiler-safe`,
       },
     ],
@@ -128,24 +117,27 @@ function saveMemory(userId, memory) {
   }
 }
 
-function isRecommendationRequest(prompt) {
+// Extract the main topic/subject from user's query
+function extractSearchTopic(prompt) {
   const lower = prompt.toLowerCase();
-  const keywords = [
-    'recommend', 'suggest', 'what to watch', 'best', 'good', 'top',
-    'action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 'sci-fi'
-  ];
-  return keywords.some(kw => lower.includes(kw));
+  
+  // Remove common question words
+  let topic = prompt.replace(/what is|tell me about|info on|details about|search for|find|look up|show me|recommend|suggest|best|good|top/gi, '');
+  
+  // Remove extra words
+  topic = topic.replace(/movie|series|film|show|anime|cartoon|documentary|about|for/gi, '');
+  
+  // Clean up
+  topic = topic.trim();
+  
+  if (topic.length < 2) return null;
+  return topic;
 }
 
-function extractGenre(prompt) {
+function isSearchQuery(prompt) {
   const lower = prompt.toLowerCase();
-  const genres = ['action', 'comedy', 'drama', 'horror', 'thriller', 'romance', 'sci-fi', 'fantasy'];
-  for (const genre of genres) {
-    if (lower.includes(genre)) {
-      return genre;
-    }
-  }
-  return null;
+  const searchWords = ['what is', 'tell me about', 'info on', 'details about', 'search for', 'find', 'look up'];
+  return searchWords.some(word => lower.includes(word)) || (lower.length > 3 && !lower.includes('recommend'));
 }
 
 function escapeRegex(string) {
@@ -173,37 +165,38 @@ export default async function handler(req, res) {
     const rateCheck = checkRateLimit(userId);
     if (!rateCheck.allowed) {
       return res.status(429).json({ 
-        error: `⏰ Chill for ${rateCheck.waitTime} seconds, bro! Too many requests.` 
+        error: `⏰ Chill for ${rateCheck.waitTime} seconds, bro!` 
       });
     }
 
     let memory = loadMemory(userId);
     memory.conversation.push({ role: "user", content: prompt });
 
-    // 🔍 Get recommendations (up to 5)
+    // 🔍 ALWAYS search for content - any query that mentions a movie/series
     let searchResults = [];
-    if (isRecommendationRequest(prompt)) {
-      const genre = extractGenre(prompt);
-      let searchQuery = genre || 'movie';
-      
-      searchResults = await searchMaxMovies(searchQuery, 5);
-      
-      if (searchResults.length === 0) {
-        searchResults = await searchMaxMovies('popular', 5);
-      }
-      
-      if (searchResults.length === 0) {
-        const trending = await getTrending(6);
-        if (trending && trending.length > 0) {
-          searchResults = trending;
-        }
-      }
+    const searchTopic = extractSearchTopic(prompt);
+    
+    if (searchTopic && searchTopic.length > 2) {
+      // Search for the specific topic (max 6)
+      searchResults = await searchMaxMovies(searchTopic, 6);
+    }
+    
+    // If no results, try trending (max 6)
+    if (searchResults.length === 0) {
+      searchResults = await getTrending(6);
+    }
+    
+    // If still no results, try a general search (max 6)
+    if (searchResults.length === 0) {
+      searchResults = await searchMaxMovies('movie', 6);
     }
 
     // Build search context for AI
     let searchContext = "";
     if (searchResults.length > 0) {
-      searchContext = `\n\n🎬 REAL movies/series from MaxMovies database:\n${JSON.stringify(searchResults, null, 2)}\n\nGive SHORT, FUN recommendations (2-3 sentences per title). BOLD each title using **Title**. Use emojis! Be exciting!`;
+      searchContext = `\n\n🎬 REAL content from MaxMovies database matching "${prompt}":\n${JSON.stringify(searchResults, null, 2)}\n\nRespond with SHORT, EXCITING info about these. **Bold each title**. Use emojis!`;
+    } else {
+      searchContext = `\n\nNo exact matches found. Give helpful movie/series advice in a fun, short way.`;
     }
 
     const promptText = `
@@ -211,17 +204,14 @@ User asked: "${prompt}"
 
 ${searchContext}
 
-Instructions for response:
+Instructions:
 1. Be EXCITING and use EMOJIS 🎬 🍿 🔥
 2. **Bold every movie/series name** using **Title**
-3. Keep it SHORT - max 3 sentences per recommendation
+3. Keep it SHORT - max 3 sentences per title
 4. Sound like a cool movie buddy
-5. NEVER over-explain or be boring
-6. Start with a fun reaction like "🎬 Yo! Here's the good stuff:" or "🍿 Okay, check these out:"
+5. Start with a fun reaction
 
-Example style:
-"🎬 **John Wick 4** - Pure adrenaline 🔥 The action sequences are next level!
-🍿 **The Batman** - Dark and gritty detective story that hits different 🎭"
+Example: "🎬 **John Wick 4** - Pure adrenaline 🔥 The action is insane!"
 
 Go!
 `;
@@ -263,9 +253,11 @@ Go!
     // Add clickable links with correct hash routing for each mentioned title
     if (searchResults.length > 0) {
       searchResults.forEach(movie => {
-        const titlePattern = new RegExp(`\\*\\*${escapeRegex(movie.title)}\\*\\*`, 'gi');
-        const link = `<a href="${SITE_URL}/#detail/${movie.subjectId}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">${movie.title}</a>`;
-        cleanText = cleanText.replace(titlePattern, link);
+        if (movie.title && movie.title.length > 2) {
+          const titlePattern = new RegExp(`\\*\\*${escapeRegex(movie.title)}\\*\\*`, 'gi');
+          const link = `<a href="${SITE_URL}/#detail/${movie.subjectId}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">${movie.title}</a>`;
+          cleanText = cleanText.replace(titlePattern, link);
+        }
       });
     }
     
@@ -277,10 +269,10 @@ Go!
     
     saveMemory(userId, memory);
 
-    // Return recommendations (up to 5) with correct URLs for thumbnails
+    // Return up to 6 search results
     return res.status(200).json({ 
       reply: cleanText,
-      recommendations: searchResults.slice(0, 5).map(item => ({
+      recommendations: searchResults.slice(0, 6).map(item => ({
         subjectId: item.subjectId,
         title: item.title,
         cover: item.cover,
