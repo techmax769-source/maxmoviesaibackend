@@ -366,16 +366,26 @@ Answer the user's question naturally about entertainment or MaxMovies. Be friend
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
     
+    // Extract system instruction from memory
+    const systemInstruction = memory.conversation.find(msg => msg.role === "system")?.content || "";
+    
     const geminiResponse = await fetch(
       `${GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: promptText }] }],
+          systemInstruction: {
+            parts: [{ text: systemInstruction }]
+          },
+          contents: [{ 
+            role: "user", 
+            parts: [{ text: promptText }] 
+          }],
           generationConfig: {
             temperature: 0.85,
             maxOutputTokens: 500,
+            topP: 0.95,
           },
         }),
         signal: controller.signal,
