@@ -3,6 +3,7 @@ import path from "path";
 
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
 const MAXMOVIES_API = "https://maxmoviesbackend.vercel.app/api/v2";
+const SITE_URL = "https://maxmovies-254.vercel.app";
 
 const MEMORY_DIR = "/tmp/memory";
 if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR);
@@ -25,7 +26,7 @@ function checkRateLimit(userId) {
   return { allowed: true };
 }
 
-// 🔍 Search MaxMovies API - Get MORE results
+// 🔍 Search MaxMovies API
 async function searchMaxMovies(query, limit = 5) {
   try {
     const searchUrl = `${MAXMOVIES_API}/search/${encodeURIComponent(query)}`;
@@ -38,7 +39,6 @@ async function searchMaxMovies(query, limit = 5) {
     
     if (items.length === 0) return [];
     
-    // Return MORE items (up to 5 instead of 3)
     return items.slice(0, limit).map(item => ({
       subjectId: item.subjectId,
       title: item.title || 'Untitled',
@@ -55,7 +55,7 @@ async function searchMaxMovies(query, limit = 5) {
   }
 }
 
-// 🎬 Get trending content (more variety)
+// 🎬 Get trending content
 async function getTrending(limit = 6) {
   try {
     const response = await fetch(`${MAXMOVIES_API}/trending`);
@@ -93,14 +93,14 @@ function loadMemory(userId) {
 
 🎬 YOUR PERSONALITY:
 - Be short, punchy, and exciting!
-- Use emojis 🎬 🍿 🔥 ✨ 😎
+- Use emojis 🎬 🍿 🔥 ✨ 😎 🎭 🎨
 - **Bold movie/series titles** using **Title**
 - Keep recommendations under 3 sentences per title
 - Sound like a chill movie buddy, not a robot
 
 📝 RESPONSE FORMAT:
 - Start with a fun emoji reaction
-- Bold each movie/series name
+- Bold each movie/series name using **Title**
 - Give 1-2 sentences WHY it's good
 - Add 🔥 for action, 😂 for comedy, 🎭 for drama, 🎨 for sci-fi
 
@@ -148,6 +148,10 @@ function extractGenre(prompt) {
   return null;
 }
 
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -176,7 +180,7 @@ export default async function handler(req, res) {
     let memory = loadMemory(userId);
     memory.conversation.push({ role: "user", content: prompt });
 
-    // 🔍 Get MORE recommendations (up to 5)
+    // 🔍 Get recommendations (up to 5)
     let searchResults = [];
     if (isRecommendationRequest(prompt)) {
       const genre = extractGenre(prompt);
@@ -253,14 +257,14 @@ Go!
       });
     }
 
-    // Clean up and add clickable links for each recommendation
+    // Clean up
     let cleanText = fullResponse.replace(/as an ai|language model/gi, "");
     
-    // Add clickable links to the detail page for each mentioned title
+    // Add clickable links with correct hash routing for each mentioned title
     if (searchResults.length > 0) {
       searchResults.forEach(movie => {
         const titlePattern = new RegExp(`\\*\\*${escapeRegex(movie.title)}\\*\\*`, 'gi');
-        const link = `<a href="https://maxmovies-254.vercel.app/detail/${movie.subjectId}" target="_blank" style="color: var(--accent); text-decoration: none;"><strong>${movie.title}</strong></a>`;
+        const link = `<a href="${SITE_URL}/#detail/${movie.subjectId}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">${movie.title}</a>`;
         cleanText = cleanText.replace(titlePattern, link);
       });
     }
@@ -273,7 +277,7 @@ Go!
     
     saveMemory(userId, memory);
 
-    // Return MORE thumbnails (up to 5)
+    // Return recommendations (up to 5) with correct URLs for thumbnails
     return res.status(200).json({ 
       reply: cleanText,
       recommendations: searchResults.slice(0, 5).map(item => ({
@@ -291,8 +295,4 @@ Go!
       error: "🎬 Service is temporarily unavailable. Try again in a few minutes, bro!" 
     });
   }
-}
-
-function escapeRegex(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
